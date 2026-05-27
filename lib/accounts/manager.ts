@@ -6,8 +6,10 @@ import type {
 	RotationConfig,
 	TokenResult,
 } from "../types.js";
+import { DEFAULT_COOLDOWN_MS } from "../constants.js";
 import type { AccountStore } from "./store.js";
 import { NoUsableAccountError } from "./errors.js";
+import { overThresholdResetsAt, parseUsageHeaders } from "./usage.js";
 
 /** Dependencies injected into the account manager (all easily faked in tests). */
 export interface ManagerDeps {
@@ -59,6 +61,17 @@ export function createAccountManager(deps: ManagerDeps): AccountManager {
 		}
 	}
 
+	function mutate(
+		accountId: string,
+		fn: (account: AccountRecord) => void,
+	): void {
+		const pool = deps.store.read();
+		const account = pool.accounts.find((a) => a.id === accountId);
+		if (!account) return;
+		fn(account);
+		deps.store.write(pool);
+	}
+
 	const manager: AccountManager = {
 		selectAccount(exclude = new Set<string>()): AccountRecord {
 			const pool = deps.store.read();
@@ -92,16 +105,63 @@ export function createAccountManager(deps: ManagerDeps): AccountManager {
 		async ensureFreshToken(account) {
 			return account;
 		},
-		recordResponseUsage() {},
-		markCooldownFromError() {},
-		markInvalid() {},
+
+		recordResponseUsage(accountId: string, headers: Headers): void {
+			const snapshot = parseUsageHeaders(headers, now());
+			if (!snapshot) return;
+			mutate(accountId, (account) => {
+				account.usage = snapshot;
+				const resetsAt = overThresholdResetsAt(snapshot, deps.config);
+				if (resetsAt !== null) {
+					account.status = "cooldown";
+					account.cooldownUntil = resetsAt;
+					account.statusAt = now();
+					notify(
+						`Account ${account.label ?? account.id} hit ${snapshot.primary?.usedPercent ?? "?"}% of its 5h limit; switching on next turn.`,
+						"info",
+					);
+				} else if (account.status === "cooldown") {
+					account.status = "healthy";
+					account.cooldownUntil = null;
+					account.statusAt = now();
+				}
+			});
+		},
+
+		markCooldownFromError(accountId: string): void {
+			mutate(accountId, (account) => {
+				const fromUsage = account.usage?.primary?.resetsAt;
+				account.status = "cooldown";
+				account.cooldownUntil =
+					typeof fromUsage === "number" && fromUsage > now()
+						? fromUsage
+						: now() + DEFAULT_COOLDOWN_MS;
+				account.statusAt = now();
+				notify(
+					`Account ${account.label ?? account.id} is rate-limited; trying another account.`,
+					"info",
+				);
+			});
+		},
+
+		markInvalid(accountId: string, reason: InvalidReason): void {
+			mutate(accountId, (account) => {
+				account.status = "invalid";
+				account.invalidReason = reason;
+				account.cooldownUntil = null;
+				account.statusAt = now();
+				const why =
+					reason === "plan_ineligible"
+						? "plan no longer includes Codex (re-subscribe and re-login)"
+						: "authentication failed (re-login required)";
+				notify(`Account ${account.label ?? account.id} disabled: ${why}.`, "warning");
+			});
+		},
+
 		captureLogin() {},
 		seedFromAuth() {},
 		async applyActive() {},
 	};
-
-	// Keep `notify` referenced (used by later-task methods).
-	void notify;
 
 	return manager;
 }
