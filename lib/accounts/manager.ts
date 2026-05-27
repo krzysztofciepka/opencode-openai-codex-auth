@@ -19,9 +19,7 @@ export interface ManagerDeps {
 	/** Refresh an access token from a refresh token (= auth.refreshAccessToken). */
 	refresh: (refreshToken: string) => Promise<TokenResult>;
 	/** Opencode client (auth.set for slot mirroring, tui.showToast for notices). */
-	client: Pick<OpencodeClient, "auth"> & {
-		tui?: { showToast?: (input: unknown) => unknown };
-	};
+	client: Pick<OpencodeClient, "auth"> & Partial<Pick<OpencodeClient, "tui">>;
 	now?: () => number;
 }
 
@@ -54,9 +52,7 @@ export function createAccountManager(deps: ManagerDeps): AccountManager {
 		else logWarn(message);
 		try {
 			deps.client.tui?.showToast?.({
-				title: "Codex account rotation",
-				message,
-				variant,
+				body: { title: "Codex account rotation", message, variant },
 			});
 		} catch {
 			// TUI not available (headless) — log line above is sufficient.

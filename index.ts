@@ -145,6 +145,8 @@ export const OpenAIAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 				const pluginConfig = loadPluginConfig();
 				const codexMode = getCodexMode(pluginConfig);
 
+				// loader runs once per session; the store + manager are session-scoped
+				// (the manager's in-memory mirror-dedup cache lives for the session).
 				// Multi-account rotation setup
 				const rotationConfig = getRotationConfig(pluginConfig);
 				const accountStore = createFileStore();
@@ -152,7 +154,7 @@ export const OpenAIAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 					store: accountStore,
 					config: rotationConfig,
 					refresh: refreshAccessToken,
-					client: client as Parameters<typeof createAccountManager>[0]["client"],
+					client,
 				});
 				// Seed the pool from the current oauth slot for existing single-account users.
 				accountManager.seedFromAuth(auth);
@@ -227,7 +229,7 @@ export const OpenAIAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 							response = result.response;
 						} catch (e) {
 							if (e instanceof NoUsableAccountError) {
-								throw new Error(ERROR_MESSAGES.NO_USABLE_ACCOUNTS);
+								throw new Error(ERROR_MESSAGES.NO_USABLE_ACCOUNTS, { cause: e });
 							}
 							throw e;
 						}
