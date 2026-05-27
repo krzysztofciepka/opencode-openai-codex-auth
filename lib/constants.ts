@@ -52,6 +52,8 @@ export const ERROR_MESSAGES = {
 	NO_ACCOUNT_ID: "Failed to extract accountId from token",
 	TOKEN_REFRESH_FAILED: "Failed to refresh token, authentication required",
 	REQUEST_PARSE_ERROR: "Error parsing request",
+	NO_USABLE_ACCOUNTS:
+		"All ChatGPT accounts are unavailable (invalid or exhausted). Run `opencode auth login` to add or re-authorize an account.",
 } as const;
 
 /** Log stages for request logging */
@@ -79,3 +81,41 @@ export const AUTH_LABELS = {
 	INSTRUCTIONS_MANUAL:
 		"After logging in, copy the full redirect URL and paste it here.",
 } as const;
+
+/** Codex rate-limit response headers (primary = 5h window, secondary = weekly) */
+export const USAGE_HEADERS = {
+	PRIMARY_USED_PERCENT: "x-codex-primary-used-percent",
+	PRIMARY_WINDOW_MINUTES: "x-codex-primary-window-minutes",
+	PRIMARY_RESET_SECONDS: "x-codex-primary-reset-after-seconds",
+	SECONDARY_USED_PERCENT: "x-codex-secondary-used-percent",
+	SECONDARY_WINDOW_MINUTES: "x-codex-secondary-window-minutes",
+	SECONDARY_RESET_SECONDS: "x-codex-secondary-reset-after-seconds",
+} as const;
+
+/** ChatGPT plan types that include Codex access */
+export const PAID_PLAN_TYPES = [
+	"plus",
+	"pro",
+	"team",
+	"business",
+	"enterprise",
+] as const;
+
+/** Substrings identifying usage-limit error responses, by kind */
+export const USAGE_LIMIT_CODES = {
+	/** Temporary — account is rate-limited and will recover at reset */
+	RATE_LIMIT: ["usage_limit_reached", "rate_limit_exceeded"],
+	/** Permanent until re-subscribe — plan does not include Codex */
+	PLAN_INELIGIBLE: ["usage_not_included"],
+} as const;
+
+/** Default rotation settings (merged with user config) */
+export const DEFAULT_ROTATION = {
+	enabled: true,
+	thresholdPercent: 90,
+	includeWeeklyWindow: true,
+	maxFallbackAttempts: 3,
+} as const;
+
+/** Fallback cooldown when a hard limit gives no reset hint (15 min) */
+export const DEFAULT_COOLDOWN_MS = 15 * 60 * 1000;
