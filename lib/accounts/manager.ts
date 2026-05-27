@@ -47,6 +47,7 @@ function isCoolingDown(account: AccountRecord, now: number): boolean {
 
 export function createAccountManager(deps: ManagerDeps): AccountManager {
 	const now = deps.now ?? (() => Date.now());
+	let lastMirrored: { id: string; access: string } | null = null;
 
 	function notify(message: string, variant: "info" | "warning" | "error") {
 		if (variant === "info") logDebug(message);
@@ -239,7 +240,34 @@ export function createAccountManager(deps: ManagerDeps): AccountManager {
 				expires: auth.expires ?? 0,
 			});
 		},
-		async applyActive() {},
+		async applyActive(account: AccountRecord): Promise<void> {
+			const pool = deps.store.read();
+			const previousActiveId = pool.activeId ?? null;
+			if (previousActiveId !== account.id) {
+				pool.activeId = account.id;
+				deps.store.write(pool);
+				if (previousActiveId !== null) {
+					const prev = pool.accounts.find((a) => a.id === previousActiveId);
+					notify(
+						`Switched to account ${account.label ?? account.id} (was ${prev?.label ?? previousActiveId}).`,
+						"info",
+					);
+				}
+			}
+			if (lastMirrored?.id === account.id && lastMirrored.access === account.access) {
+				return;
+			}
+			lastMirrored = { id: account.id, access: account.access };
+			await deps.client.auth.set({
+				path: { id: "openai" },
+				body: {
+					type: "oauth",
+					access: account.access,
+					refresh: account.refresh,
+					expires: account.expires,
+				},
+			});
+		},
 	};
 
 	return manager;

@@ -349,3 +349,32 @@ describe('seedFromAuth', () => {
 		expect(store._current().accounts).toHaveLength(0);
 	});
 });
+
+describe('applyActive', () => {
+	it('mirrors the account into the opencode openai slot', async () => {
+		const pool: AccountPool = { version: 1, activeId: 'a', accounts: [acct('a')] };
+		const { manager, client } = makeManager(pool, 1000);
+		await manager.applyActive(pool.accounts[0]);
+		expect(client.auth.set).toHaveBeenCalledWith({
+			path: { id: 'openai' },
+			body: { type: 'oauth', access: 'acc-a', refresh: 'ref-a', expires: Number.MAX_SAFE_INTEGER },
+		});
+	});
+
+	it('does not re-mirror the same account+token twice', async () => {
+		const pool: AccountPool = { version: 1, activeId: 'a', accounts: [acct('a')] };
+		const { manager, client } = makeManager(pool, 1000);
+		await manager.applyActive(pool.accounts[0]);
+		await manager.applyActive(pool.accounts[0]);
+		expect(client.auth.set).toHaveBeenCalledTimes(1);
+	});
+
+	it('emits a switch toast and updates activeId when switching accounts', async () => {
+		const pool: AccountPool = { version: 1, activeId: 'a', accounts: [acct('a'), acct('b', { priority: 2 })] };
+		const { manager, client, store } = makeManager(pool, 1000);
+		await manager.applyActive(pool.accounts[0]); // active = a (no switch toast, same as activeId)
+		await manager.applyActive(pool.accounts[1]); // switch a -> b
+		expect(store._current().activeId).toBe('b');
+		expect(client.tui.showToast).toHaveBeenCalled();
+	});
+});
