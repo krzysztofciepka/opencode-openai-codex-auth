@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { getModelConfig, getReasoningConfig } from '../lib/request/request-transformer.js';
 import type { UserConfig } from '../lib/types.js';
+import { getRotationConfig } from '../lib/config.js';
 
 describe('Configuration Parsing', () => {
 	const providerConfig = {
@@ -147,5 +148,32 @@ describe('Configuration Parsing', () => {
 			const gpt5Reasoning = getReasoningConfig('gpt-5', {});
 			expect(gpt5Reasoning.effort).toBe('medium');
 		});
+	});
+});
+
+describe('getRotationConfig', () => {
+	it('returns defaults when rotation is absent', () => {
+		const cfg = getRotationConfig({ codexMode: true });
+		expect(cfg).toEqual({
+			enabled: true,
+			thresholdPercent: 90,
+			includeWeeklyWindow: true,
+			maxFallbackAttempts: 3,
+		});
+	});
+
+	it('merges partial user overrides over defaults', () => {
+		const cfg = getRotationConfig({
+			rotation: { thresholdPercent: 80, maxFallbackAttempts: 5 },
+		});
+		expect(cfg.thresholdPercent).toBe(80);
+		expect(cfg.maxFallbackAttempts).toBe(5);
+		expect(cfg.enabled).toBe(true);
+		expect(cfg.includeWeeklyWindow).toBe(true);
+	});
+
+	it('respects enabled:false', () => {
+		const cfg = getRotationConfig({ rotation: { enabled: false } });
+		expect(cfg.enabled).toBe(false);
 	});
 });

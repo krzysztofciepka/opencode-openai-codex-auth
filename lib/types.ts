@@ -9,6 +9,9 @@ export interface PluginConfig {
 	 * @default true
 	 */
 	codexMode?: boolean;
+
+	/** Multi-account rotation settings (partial; merged with defaults) */
+	rotation?: Partial<RotationConfig>;
 }
 
 /**
@@ -106,6 +109,8 @@ export interface ParsedAuthInput {
 export interface JWTPayload {
 	"https://api.openai.com/auth"?: {
 		chatgpt_account_id?: string;
+		chatgpt_user_id?: string;
+		chatgpt_plan_type?: string;
 	};
 	[key: string]: unknown;
 }
@@ -172,6 +177,72 @@ export interface CacheMetadata {
 export interface GitHubRelease {
 	tag_name: string;
 	[key: string]: unknown;
+}
+
+/** Classification of a ChatGPT plan from the JWT `chatgpt_plan_type` claim */
+export type PlanClass = "paid" | "free" | "unknown";
+
+/** Resolved multi-account rotation settings */
+export interface RotationConfig {
+	/** When false, behaves as single-account (no rotation). Auto-on with 2+ accounts. */
+	enabled: boolean;
+	/** 5h primary-window used-percent at which to switch accounts */
+	thresholdPercent: number;
+	/** Also treat an account unavailable when its weekly window is exhausted */
+	includeWeeklyWindow: boolean;
+	/** Max backend sends within one request when falling back on a hard limit */
+	maxFallbackAttempts: number;
+}
+
+/** Usage for a single rate-limit window (5h primary or weekly secondary) */
+export interface WindowUsage {
+	usedPercent: number;
+	windowMinutes: number;
+	/** Absolute epoch-ms time when this window resets */
+	resetsAt: number;
+}
+
+/** Snapshot of both rate-limit windows parsed from a response */
+export interface UsageSnapshot {
+	primary?: WindowUsage;
+	secondary?: WindowUsage;
+	/** epoch-ms when this snapshot was recorded */
+	updatedAt: number;
+}
+
+/** Lifecycle status of a pooled account */
+export type AccountStatus = "healthy" | "cooldown" | "invalid";
+
+/** Reason an account is `invalid` */
+export type InvalidReason = "auth_failed" | "plan_ineligible";
+
+/** One ChatGPT account in the rotation pool */
+export interface AccountRecord {
+	/** chatgpt_account_id — stable key, dedupes on re-login */
+	id: string;
+	label?: string;
+	/** selection order; lower wins */
+	priority: number;
+	/** OAuth access token */
+	access: string;
+	/** OAuth refresh token */
+	refresh: string;
+	/** epoch-ms expiry of the access token */
+	expires: number;
+	status: AccountStatus;
+	invalidReason?: InvalidReason | null;
+	/** epoch-ms when status last changed */
+	statusAt: number;
+	/** epoch-ms until which the account is rate-limited (cooldown) */
+	cooldownUntil?: number | null;
+	usage?: UsageSnapshot | null;
+}
+
+/** Persisted account pool file shape */
+export interface AccountPool {
+	version: 1;
+	activeId?: string | null;
+	accounts: AccountRecord[];
 }
 
 // Re-export SDK types for convenience

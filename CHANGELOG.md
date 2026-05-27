@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Dates use the ISO format (YYYY-MM-DD).
 
+## [Unreleased]
+
+### Added
+- **Multi-account rotation**: configure multiple ChatGPT accounts and switch between them automatically based on the 5h usage window, with hard-limit fallback and detection of revoked/free-plan accounts.
+
 ## [4.4.0] - 2026-01-09
 
 **Maintenance release**: OAuth success page version sync.

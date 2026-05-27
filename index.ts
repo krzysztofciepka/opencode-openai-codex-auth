@@ -29,11 +29,12 @@ import {
 	decodeJWT,
 	exchangeAuthorizationCode,
 	parseAuthorizationInput,
+	refreshAccessToken,
 	REDIRECT_URI,
 } from "./lib/auth/auth.js";
 import { openBrowserUrl } from "./lib/auth/browser.js";
 import { startLocalOAuthServer } from "./lib/auth/server.js";
-import { getCodexMode, loadPluginConfig } from "./lib/config.js";
+import { getCodexMode, getRotationConfig, loadPluginConfig } from "./lib/config.js";
 import {
 	AUTH_LABELS,
 	CODEX_BASE_URL,
@@ -52,12 +53,15 @@ import {
 	extractRequestUrl,
 	handleErrorResponse,
 	handleSuccessResponse,
-	refreshAndUpdateToken,
+	inspectUsageLimitResponse,
 	rewriteUrlForCodex,
-	shouldRefreshToken,
 	transformRequestForCodex,
 } from "./lib/request/fetch-helpers.js";
-import type { UserConfig } from "./lib/types.js";
+import { createFileStore } from "./lib/accounts/store.js";
+import { createAccountManager } from "./lib/accounts/manager.js";
+import { NoUsableAccountError } from "./lib/accounts/errors.js";
+import { rotatingFetch } from "./lib/request/rotating-fetch.js";
+import type { AccountRecord, UserConfig } from "./lib/types.js";
 
 /**
  * OpenAI Codex OAuth authentication plugin for opencode
@@ -89,9 +93,35 @@ export const OpenAIAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 				pkce.verifier,
 				REDIRECT_URI,
 			);
-			return tokens?.type === "success" ? tokens : { type: "failed" as const };
+			if (tokens?.type === "success") {
+				captureTokens(tokens);
+				return tokens;
+			}
+			return { type: "failed" as const };
 		},
 	});
+	// Plugin-scope manager for capturing logins (the loader builds its own for requests).
+	const loginCaptureManager = createAccountManager({
+		store: createFileStore(),
+		config: getRotationConfig(loadPluginConfig()),
+		refresh: refreshAccessToken,
+		client,
+	});
+	const captureTokens = (tokens: {
+		type: string;
+		access?: string;
+		refresh?: string;
+		expires?: number;
+	}) => {
+		if (tokens.type === "success" && tokens.access && tokens.refresh) {
+			loginCaptureManager.captureLogin({
+				access: tokens.access,
+				refresh: tokens.refresh,
+				expires: tokens.expires ?? 0,
+			});
+		}
+	};
+
 	return {
 		auth: {
 			provider: PROVIDER_ID,
@@ -141,6 +171,20 @@ export const OpenAIAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 				const pluginConfig = loadPluginConfig();
 				const codexMode = getCodexMode(pluginConfig);
 
+				// loader runs once per session; the store + manager are session-scoped
+				// (the manager's in-memory mirror-dedup cache lives for the session).
+				// Multi-account rotation setup
+				const rotationConfig = getRotationConfig(pluginConfig);
+				const accountStore = createFileStore();
+				const accountManager = createAccountManager({
+					store: accountStore,
+					config: rotationConfig,
+					refresh: refreshAccessToken,
+					client,
+				});
+				// Seed the pool from the current oauth slot for existing single-account users.
+				accountManager.seedFromAuth(auth);
+
 				// Return SDK configuration
 				return {
 					apiKey: DUMMY_API_KEY,
@@ -164,23 +208,15 @@ export const OpenAIAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 						input: Request | string | URL,
 						init?: RequestInit,
 					): Promise<Response> {
-						// Step 1: Check and refresh token if needed
-						let currentAuth = await getAuth();
-						if (shouldRefreshToken(currentAuth)) {
-							currentAuth = await refreshAndUpdateToken(currentAuth, client);
-						}
-
-						// Step 2: Extract and rewrite URL for Codex backend
+						// Extract and rewrite URL for Codex backend
 						const originalUrl = extractRequestUrl(input);
 						const url = rewriteUrlForCodex(originalUrl);
 
-						// Step 3: Transform request body with model-specific Codex instructions
-						// Instructions are fetched per model family (codex-max, codex, gpt-5.1)
 						// Capture original stream value before transformation
-						// generateText() sends no stream field, streamText() sends stream=true
 						const originalBody = init?.body ? JSON.parse(init.body as string) : {};
 						const isStreaming = originalBody.stream === true;
 
+						// Transform request body with model-specific Codex instructions
 						const transformation = await transformRequestForCodex(
 							init,
 							url,
@@ -189,26 +225,42 @@ export const OpenAIAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 						);
 						const requestInit = transformation?.updatedInit ?? init;
 
-						// Step 4: Create headers with OAuth and ChatGPT account info
-						const accessToken =
-							currentAuth.type === "oauth" ? currentAuth.access : "";
-						const headers = createCodexHeaders(
-							requestInit,
-							accountId,
-							accessToken,
-							{
-								model: transformation?.body.model,
-								promptCacheKey: (transformation?.body as any)?.prompt_cache_key,
-							},
-						);
+						// Build the per-account send: headers carry the selected account's
+						// token + id; applyActive mirrors it into the opencode slot.
+						const doFetch = async (account: AccountRecord): Promise<Response> => {
+							await accountManager.applyActive(account);
+							const headers = createCodexHeaders(
+								requestInit,
+								account.id,
+								account.access,
+								{
+									model: transformation?.body.model,
+									promptCacheKey: (transformation?.body as any)?.prompt_cache_key,
+								},
+							);
+							return fetch(url, { ...requestInit, headers });
+						};
 
-						// Step 5: Make request to Codex API
-						const response = await fetch(url, {
-							...requestInit,
-							headers,
-						});
+						// Select an account, refresh, send, and fall back on hard limits.
+						let account: AccountRecord;
+						let response: Response;
+						try {
+							const result = await rotatingFetch({
+								manager: accountManager,
+								config: rotationConfig,
+								doFetch,
+								inspectUsageLimit: inspectUsageLimitResponse,
+							});
+							account = result.account;
+							response = result.response;
+						} catch (e) {
+							if (e instanceof NoUsableAccountError) {
+								throw new Error(ERROR_MESSAGES.NO_USABLE_ACCOUNTS, { cause: e });
+							}
+							throw e;
+						}
 
-						// Step 6: Log response
+						// Log response
 						logRequest(LOG_STAGES.RESPONSE, {
 							status: response.status,
 							ok: response.ok,
@@ -216,11 +268,12 @@ export const OpenAIAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 							headers: Object.fromEntries(response.headers.entries()),
 						});
 
-						// Step 7: Handle error or success response
 						if (!response.ok) {
 							return await handleErrorResponse(response);
 						}
 
+						// Record usage so the next turn can switch if over threshold.
+						accountManager.recordResponseUsage(account.id, response.headers);
 						return await handleSuccessResponse(response, isStreaming);
 					},
 				};
@@ -271,9 +324,11 @@ export const OpenAIAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 									REDIRECT_URI,
 								);
 
-								return tokens?.type === "success"
-									? tokens
-									: { type: "failed" as const };
+								if (tokens?.type === "success") {
+									captureTokens(tokens);
+									return tokens;
+								}
+								return { type: "failed" as const };
 							},
 						};
 					},

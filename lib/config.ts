@@ -1,7 +1,8 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { PluginConfig } from "./types.js";
+import { DEFAULT_ROTATION } from "./constants.js";
+import type { PluginConfig, RotationConfig } from "./types.js";
 
 const CONFIG_PATH = join(homedir(), ".opencode", "openai-codex-auth-config.json");
 
@@ -57,4 +58,21 @@ export function getCodexMode(pluginConfig: PluginConfig): boolean {
 
 	// Use config setting (defaults to true)
 	return pluginConfig.codexMode ?? true;
+}
+
+/**
+ * Resolve effective rotation settings by merging user config over defaults.
+ * @param pluginConfig - Plugin configuration from file
+ * @returns Fully-populated rotation config
+ */
+export function getRotationConfig(pluginConfig: PluginConfig): RotationConfig {
+	const r = pluginConfig.rotation ?? {};
+	return {
+		enabled: r.enabled ?? DEFAULT_ROTATION.enabled,
+		thresholdPercent: r.thresholdPercent ?? DEFAULT_ROTATION.thresholdPercent,
+		includeWeeklyWindow:
+			r.includeWeeklyWindow ?? DEFAULT_ROTATION.includeWeeklyWindow,
+		maxFallbackAttempts:
+			r.maxFallbackAttempts ?? DEFAULT_ROTATION.maxFallbackAttempts,
+	};
 }
