@@ -404,6 +404,55 @@ CODEX_MODE=1 opencode run "task"  # Temporarily enable
 
 ---
 
+## Multi-account rotation
+
+Run multiple ChatGPT accounts and let the plugin rotate between them as the 5-hour usage window fills, without interrupting your opencode session.
+
+### Adding accounts
+
+Run the OAuth login once for each account you want in the pool:
+
+```bash
+opencode auth login
+# select "ChatGPT Plus/Pro (Codex Subscription)" and complete the browser flow
+```
+
+Each completed login is upserted into `~/.opencode/openai-codex-accounts.json`, keyed by ChatGPT account ID. Re-logging in with the same account updates its entry in place. The file contains refresh tokens and is written with `0600` permissions.
+
+Rotation engages automatically once 2 or more accounts exist. With a single account the behaviour is identical to before.
+
+### Settings
+
+Add a `rotation` block to `~/.opencode/openai-codex-auth-config.json`:
+
+```json
+{
+  "rotation": {
+    "enabled": true,
+    "thresholdPercent": 90,
+    "includeWeeklyWindow": true,
+    "maxFallbackAttempts": 3
+  }
+}
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `enabled` | `true` | Set `false` to disable rotation and force single-account behaviour. |
+| `thresholdPercent` | `90` | Switch to the next account when the active account's 5-hour window reaches this percentage. |
+| `includeWeeklyWindow` | `true` | Also rotate when the weekly window is exhausted. |
+| `maxFallbackAttempts` | `3` | Number of accounts tried within a single turn when a hard usage-limit error is hit. |
+
+### Behavior
+
+- **Threshold switch**: when the active account's 5-hour usage reaches `thresholdPercent`, the _next_ turn is served by another account (ascending `priority` order).
+- **Hard-limit fallback**: if a request hits a hard usage limit mid-turn, the plugin retries the same request on another account so the turn still completes (up to `maxFallbackAttempts`).
+- **Disabled accounts**: an account whose subscription has lapsed to free, or whose login was revoked, is skipped automatically until you re-login (re-subscribe first for plan lapses).
+- **Visibility**: account switches surface as a TUI toast and are written to the plugin log.
+- **Priority and labels**: accounts follow login order by default. Edit the `priority` field (and the optional `label` field) directly in `~/.opencode/openai-codex-accounts.json` to change preference.
+
+---
+
 ## Configuration Files
 
 **Provided Examples:**

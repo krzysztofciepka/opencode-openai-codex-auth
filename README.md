@@ -62,6 +62,7 @@ Minimal configs are not supported for GPT‑5.x; use the full configs above.
 - Variant system support (v1.0.210+) + legacy presets
 - Multimodal input enabled for all models
 - Usage‑aware errors + automatic token refresh
+- **Multi-account rotation** — configure several ChatGPT accounts and rotate between them automatically as the 5h usage limit approaches, without losing your session. See [Configuration → Multi-account rotation](docs/configuration.md#multi-account-rotation).
 ---
 ## 📚 Docs
 - Getting Started: `docs/getting-started.md`
