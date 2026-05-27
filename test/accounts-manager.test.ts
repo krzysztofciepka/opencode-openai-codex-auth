@@ -256,3 +256,96 @@ describe('ensureFreshToken', () => {
 		expect(store._current().accounts[0].invalidReason).toBe('plan_ineligible');
 	});
 });
+
+describe('captureLogin', () => {
+	it('adds a new account with the next priority and sets it active if first', () => {
+		const pool: AccountPool = { version: 1, activeId: null, accounts: [] };
+		const { manager, store } = makeManager(pool, 1000);
+		vi.spyOn(tokenModule, 'getAccountIdFromToken').mockReturnValue('acc_new');
+		vi.spyOn(tokenModule, 'classifyPlan').mockReturnValue('paid');
+
+		manager.captureLogin({ access: 'x', refresh: 'y', expires: 5 });
+
+		const saved = store._current();
+		expect(saved.accounts).toHaveLength(1);
+		expect(saved.accounts[0].id).toBe('acc_new');
+		expect(saved.accounts[0].priority).toBe(1);
+		expect(saved.activeId).toBe('acc_new');
+	});
+
+	it('assigns the next priority for a second account', () => {
+		const pool: AccountPool = { version: 1, activeId: 'acc_1', accounts: [acct('acc_1', { priority: 1 })] };
+		const { manager, store } = makeManager(pool, 1000);
+		vi.spyOn(tokenModule, 'getAccountIdFromToken').mockReturnValue('acc_2');
+		vi.spyOn(tokenModule, 'classifyPlan').mockReturnValue('paid');
+
+		manager.captureLogin({ access: 'x', refresh: 'y', expires: 5 });
+
+		const added = store._current().accounts.find((a) => a.id === 'acc_2');
+		expect(added?.priority).toBe(2);
+	});
+
+	it('revives a tombstoned account on re-login (by id)', () => {
+		const pool: AccountPool = { version: 1, activeId: 'acc_1', accounts: [
+			acct('acc_1', { status: 'invalid', invalidReason: 'auth_failed' }),
+		] };
+		const { manager, store } = makeManager(pool, 1000);
+		vi.spyOn(tokenModule, 'getAccountIdFromToken').mockReturnValue('acc_1');
+		vi.spyOn(tokenModule, 'classifyPlan').mockReturnValue('paid');
+
+		manager.captureLogin({ access: 'fresh', refresh: 'fresh-r', expires: 50 });
+
+		const saved = store._current().accounts[0];
+		expect(saved.status).toBe('healthy');
+		expect(saved.invalidReason).toBeNull();
+		expect(saved.access).toBe('fresh');
+	});
+
+	it('stores an explicitly-free login as plan_ineligible', () => {
+		const pool: AccountPool = { version: 1, activeId: null, accounts: [] };
+		const { manager, store } = makeManager(pool, 1000);
+		vi.spyOn(tokenModule, 'getAccountIdFromToken').mockReturnValue('acc_free');
+		vi.spyOn(tokenModule, 'classifyPlan').mockReturnValue('free');
+
+		manager.captureLogin({ access: 'x', refresh: 'y', expires: 5 });
+
+		const saved = store._current().accounts[0];
+		expect(saved.status).toBe('invalid');
+		expect(saved.invalidReason).toBe('plan_ineligible');
+	});
+
+	it('ignores a token with no account id', () => {
+		const pool: AccountPool = { version: 1, activeId: null, accounts: [] };
+		const { manager, store } = makeManager(pool, 1000);
+		vi.spyOn(tokenModule, 'getAccountIdFromToken').mockReturnValue(undefined);
+		manager.captureLogin({ access: 'x', refresh: 'y', expires: 5 });
+		expect(store._current().accounts).toHaveLength(0);
+	});
+});
+
+describe('seedFromAuth', () => {
+	it('seeds the pool from an oauth slot when empty', () => {
+		const pool: AccountPool = { version: 1, activeId: null, accounts: [] };
+		const { manager, store } = makeManager(pool, 1000);
+		vi.spyOn(tokenModule, 'getAccountIdFromToken').mockReturnValue('acc_seed');
+		vi.spyOn(tokenModule, 'classifyPlan').mockReturnValue('paid');
+
+		manager.seedFromAuth({ type: 'oauth', access: 'a', refresh: 'r', expires: 9 });
+
+		expect(store._current().accounts[0].id).toBe('acc_seed');
+	});
+
+	it('does nothing when the pool already has accounts', () => {
+		const pool: AccountPool = { version: 1, activeId: 'acc_1', accounts: [acct('acc_1')] };
+		const { manager, store } = makeManager(pool, 1000);
+		manager.seedFromAuth({ type: 'oauth', access: 'a', refresh: 'r', expires: 9 });
+		expect(store._current().accounts).toHaveLength(1);
+	});
+
+	it('does nothing for non-oauth auth', () => {
+		const pool: AccountPool = { version: 1, activeId: null, accounts: [] };
+		const { manager, store } = makeManager(pool, 1000);
+		manager.seedFromAuth({ type: 'api' });
+		expect(store._current().accounts).toHaveLength(0);
+	});
+});

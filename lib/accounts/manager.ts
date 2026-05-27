@@ -10,7 +10,7 @@ import { DEFAULT_COOLDOWN_MS } from "../constants.js";
 import type { AccountStore } from "./store.js";
 import { NoUsableAccountError } from "./errors.js";
 import { overThresholdResetsAt, parseUsageHeaders } from "./usage.js";
-import { classifyPlan } from "./token.js";
+import { classifyPlan, getAccountIdFromToken } from "./token.js";
 
 /** Dependencies injected into the account manager (all easily faked in tests). */
 export interface ManagerDeps {
@@ -187,8 +187,58 @@ export function createAccountManager(deps: ManagerDeps): AccountManager {
 			});
 		},
 
-		captureLogin() {},
-		seedFromAuth() {},
+		captureLogin(tokens: { access: string; refresh: string; expires: number }): void {
+			const accountId = getAccountIdFromToken(tokens.access);
+			if (!accountId) return;
+			const free = classifyPlan(tokens.access) === "free";
+
+			const pool = deps.store.read();
+			let account = pool.accounts.find((a) => a.id === accountId);
+			if (!account) {
+				const priority = pool.accounts.length
+					? Math.max(...pool.accounts.map((a) => a.priority)) + 1
+					: 1;
+				account = {
+					id: accountId,
+					priority,
+					access: tokens.access,
+					refresh: tokens.refresh,
+					expires: tokens.expires,
+					status: "healthy",
+					invalidReason: null,
+					statusAt: now(),
+					cooldownUntil: null,
+					usage: null,
+				};
+				pool.accounts.push(account);
+			} else {
+				account.access = tokens.access;
+				account.refresh = tokens.refresh;
+				account.expires = tokens.expires;
+				account.status = "healthy";
+				account.invalidReason = null;
+				account.statusAt = now();
+				account.cooldownUntil = null;
+			}
+
+			if (free) {
+				account.status = "invalid";
+				account.invalidReason = "plan_ineligible";
+				account.statusAt = now();
+			}
+			if (!pool.activeId) pool.activeId = accountId;
+			deps.store.write(pool);
+		},
+
+		seedFromAuth(auth): void {
+			if (auth.type !== "oauth" || !auth.access || !auth.refresh) return;
+			if (deps.store.read().accounts.length > 0) return;
+			manager.captureLogin({
+				access: auth.access,
+				refresh: auth.refresh,
+				expires: auth.expires ?? 0,
+			});
+		},
 		async applyActive() {},
 	};
 
