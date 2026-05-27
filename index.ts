@@ -93,9 +93,35 @@ export const OpenAIAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 				pkce.verifier,
 				REDIRECT_URI,
 			);
-			return tokens?.type === "success" ? tokens : { type: "failed" as const };
+			if (tokens?.type === "success") {
+				captureTokens(tokens);
+				return tokens;
+			}
+			return { type: "failed" as const };
 		},
 	});
+	// Plugin-scope manager for capturing logins (the loader builds its own for requests).
+	const loginCaptureManager = createAccountManager({
+		store: createFileStore(),
+		config: getRotationConfig(loadPluginConfig()),
+		refresh: refreshAccessToken,
+		client,
+	});
+	const captureTokens = (tokens: {
+		type: string;
+		access?: string;
+		refresh?: string;
+		expires?: number;
+	}) => {
+		if (tokens.type === "success" && tokens.access && tokens.refresh) {
+			loginCaptureManager.captureLogin({
+				access: tokens.access,
+				refresh: tokens.refresh,
+				expires: tokens.expires ?? 0,
+			});
+		}
+	};
+
 	return {
 		auth: {
 			provider: PROVIDER_ID,
@@ -298,9 +324,11 @@ export const OpenAIAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 									REDIRECT_URI,
 								);
 
-								return tokens?.type === "success"
-									? tokens
-									: { type: "failed" as const };
+								if (tokens?.type === "success") {
+									captureTokens(tokens);
+									return tokens;
+								}
+								return { type: "failed" as const };
 							},
 						};
 					},

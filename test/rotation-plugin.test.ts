@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as storeModule from '../lib/accounts/store.js';
+import * as authModule from '../lib/auth/auth.js';
 import * as codexPrompts from '../lib/prompts/codex.js';
 import { OpenAIAuthPlugin } from '../index.js';
 import type { AccountPool } from '../lib/types.js';
@@ -116,5 +117,27 @@ describe('plugin rotation (integration)', () => {
 		expect(res.status).toBe(200);
 		expect(accountsUsed).toEqual(['acc_1', 'acc_2']);
 		g.mockRestore();
+	});
+});
+
+describe('capture-on-login', () => {
+	it('adds a completed OAuth login to the pool', async () => {
+		// Start with an empty pool for this test.
+		writeFileSync(poolPath, JSON.stringify({ version: 1, activeId: null, accounts: [] }));
+
+		vi.spyOn(authModule, 'exchangeAuthorizationCode').mockResolvedValue({
+			type: 'success', access: token('acc_new'), refresh: 'rnew', expires: 123,
+		} as any);
+
+		const client: any = { auth: { set: vi.fn() }, tui: { showToast: vi.fn() } };
+		const plugin = await OpenAIAuthPlugin({ client } as any);
+		const methods = plugin.auth!.methods as any[];
+		const manual = methods.find((m) => m.type === 'oauth' && typeof m.authorize === 'function' && m.label?.includes('Manual'));
+		const flow = await manual.authorize();
+		const result = await flow.callback('https://localhost/cb?code=abc&state=xyz');
+
+		expect(result.type).toBe('success');
+		const saved = JSON.parse(readFileSync(poolPath, 'utf-8'));
+		expect(saved.accounts.map((a: any) => a.id)).toContain('acc_new');
 	});
 });
