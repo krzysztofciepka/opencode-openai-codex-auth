@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createAccountManager } from '../lib/accounts/manager.js';
 import { NoUsableAccountError } from '../lib/accounts/errors.js';
 import type { AccountPool, AccountRecord, RotationConfig, AccountStatus } from '../lib/types.js';
+import * as tokenModule from '../lib/accounts/token.js';
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -185,5 +186,73 @@ describe('markInvalid', () => {
 		expect(saved.status).toBe('invalid');
 		expect(saved.invalidReason).toBe('plan_ineligible');
 		expect(saved.cooldownUntil).toBeNull();
+	});
+});
+
+describe('ensureFreshToken', () => {
+	it('returns the account unchanged when the token is still valid', async () => {
+		const pool: AccountPool = { version: 1, activeId: 'a', accounts: [
+			acct('a', { expires: 1000 + 60_000 }),
+		] };
+		const { manager, refresh } = makeManager(pool, 1000);
+		const result = await manager.ensureFreshToken(pool.accounts[0]);
+		expect(result?.access).toBe('acc-a');
+		expect(refresh).not.toHaveBeenCalled();
+	});
+
+	it('refreshes an expired token and persists the new tokens', async () => {
+		const pool: AccountPool = { version: 1, activeId: 'a', accounts: [
+			acct('a', { expires: 0 }),
+		] };
+		const { manager, store, refresh } = makeManager(pool, 1000);
+		refresh.mockResolvedValue({ type: 'success', access: 'new-a', refresh: 'new-r', expires: 999999 });
+		vi.spyOn(tokenModule, 'classifyPlan').mockReturnValue('paid');
+
+		const result = await manager.ensureFreshToken(pool.accounts[0]);
+
+		expect(result?.access).toBe('new-a');
+		expect(store._current().accounts[0].access).toBe('new-a');
+		expect(store._current().accounts[0].expires).toBe(999999);
+	});
+
+	it('resets a previously-invalid account to healthy on successful refresh', async () => {
+		const pool: AccountPool = { version: 1, activeId: 'a', accounts: [
+			acct('a', { expires: 0, status: 'invalid', invalidReason: 'auth_failed' }),
+		] };
+		const { manager, store, refresh } = makeManager(pool, 1000);
+		refresh.mockResolvedValue({ type: 'success', access: 'new-a', refresh: 'new-r', expires: 999999 });
+		vi.spyOn(tokenModule, 'classifyPlan').mockReturnValue('paid');
+
+		const result = await manager.ensureFreshToken(pool.accounts[0]);
+
+		expect(result?.status).toBe('healthy');
+		expect(result?.invalidReason).toBeNull();
+		expect(store._current().accounts[0].status).toBe('healthy');
+		expect(store._current().accounts[0].invalidReason).toBeNull();
+	});
+
+	it('tombstones the account as auth_failed when refresh fails', async () => {
+		const pool: AccountPool = { version: 1, activeId: 'a', accounts: [acct('a', { expires: 0 })] };
+		const { manager, store, refresh } = makeManager(pool, 1000);
+		refresh.mockResolvedValue({ type: 'failed' });
+
+		const result = await manager.ensureFreshToken(pool.accounts[0]);
+
+		expect(result).toBeNull();
+		expect(store._current().accounts[0].status).toBe('invalid');
+		expect(store._current().accounts[0].invalidReason).toBe('auth_failed');
+	});
+
+	it('tombstones as plan_ineligible when the refreshed token is a free plan', async () => {
+		const pool: AccountPool = { version: 1, activeId: 'a', accounts: [acct('a', { expires: 0 })] };
+		const { manager, store, refresh } = makeManager(pool, 1000);
+		refresh.mockResolvedValue({ type: 'success', access: 'free-a', refresh: 'r', expires: 999999 });
+		vi.spyOn(tokenModule, 'classifyPlan').mockReturnValue('free');
+
+		const result = await manager.ensureFreshToken(pool.accounts[0]);
+
+		expect(result).toBeNull();
+		expect(store._current().accounts[0].status).toBe('invalid');
+		expect(store._current().accounts[0].invalidReason).toBe('plan_ineligible');
 	});
 });

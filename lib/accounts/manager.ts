@@ -10,6 +10,7 @@ import { DEFAULT_COOLDOWN_MS } from "../constants.js";
 import type { AccountStore } from "./store.js";
 import { NoUsableAccountError } from "./errors.js";
 import { overThresholdResetsAt, parseUsageHeaders } from "./usage.js";
+import { classifyPlan } from "./token.js";
 
 /** Dependencies injected into the account manager (all easily faked in tests). */
 export interface ManagerDeps {
@@ -101,9 +102,37 @@ export function createAccountManager(deps: ManagerDeps): AccountManager {
 			throw new NoUsableAccountError();
 		},
 
-		// Implemented in later tasks.
-		async ensureFreshToken(account) {
-			return account;
+		async ensureFreshToken(account: AccountRecord): Promise<AccountRecord | null> {
+			if (account.expires > now()) return account;
+
+			const result = await deps.refresh(account.refresh);
+			if (result.type === "failed") {
+				manager.markInvalid(account.id, "auth_failed");
+				return null;
+			}
+
+			if (classifyPlan(result.access) === "free") {
+				// Persist the new tokens first so a later re-check is accurate, then tombstone.
+				mutate(account.id, (a) => {
+					a.access = result.access;
+					a.refresh = result.refresh;
+					a.expires = result.expires;
+				});
+				manager.markInvalid(account.id, "plan_ineligible");
+				return null;
+			}
+
+			let updated: AccountRecord | null = null;
+			mutate(account.id, (a) => {
+				a.access = result.access;
+				a.refresh = result.refresh;
+				a.expires = result.expires;
+				a.status = "healthy";
+				a.invalidReason = null;
+				a.statusAt = now();
+				updated = { ...a };
+			});
+			return updated;
 		},
 
 		recordResponseUsage(accountId: string, headers: Headers): void {
