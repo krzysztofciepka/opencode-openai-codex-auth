@@ -7,6 +7,7 @@ import {
     rewriteUrlForCodex,
     createCodexHeaders,
     handleErrorResponse,
+    inspectUsageLimitResponse,
 } from '../lib/request/fetch-helpers.js';
 import type { Auth } from '../lib/types.js';
 import { URL_PATHS, OPENAI_HEADERS, OPENAI_HEADER_VALUES } from '../lib/constants.js';
@@ -185,4 +186,27 @@ describe('Fetch Helpers Module', () => {
 			expect(headers.get(OPENAI_HEADERS.SESSION_ID)).toBeNull();
 		});
     });
+
+	describe('inspectUsageLimitResponse', () => {
+		it('returns plan_ineligible for usage_not_included on a 404', async () => {
+			const res = new Response(JSON.stringify({ error: { code: 'usage_not_included' } }), { status: 404 });
+			expect(await inspectUsageLimitResponse(res)).toBe('plan_ineligible');
+		});
+
+		it('returns rate_limit for usage_limit_reached on a 429', async () => {
+			const res = new Response(JSON.stringify({ error: { type: 'usage_limit_reached' } }), { status: 429 });
+			expect(await inspectUsageLimitResponse(res)).toBe('rate_limit');
+		});
+
+		it('returns null for non-usage errors', async () => {
+			const res = new Response(JSON.stringify({ error: { code: 'server_error' } }), { status: 500 });
+			expect(await inspectUsageLimitResponse(res)).toBeNull();
+		});
+
+		it('does not consume the original response body', async () => {
+			const res = new Response(JSON.stringify({ error: { code: 'usage_not_included' } }), { status: 404 });
+			await inspectUsageLimitResponse(res);
+			await expect(res.text()).resolves.toContain('usage_not_included');
+		});
+	});
 });

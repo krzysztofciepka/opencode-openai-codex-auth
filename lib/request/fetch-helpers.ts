@@ -20,6 +20,7 @@ import {
 	ERROR_MESSAGES,
 	LOG_STAGES,
 } from "../constants.js";
+import { classifyUsageLimitError } from "../accounts/usage.js";
 
 /**
  * Determines if the current auth token needs to be refreshed
@@ -241,9 +242,8 @@ export async function handleSuccessResponse(
 	});
 }
 
-async function mapUsageLimit404(response: Response): Promise<Response | null> {
-	if (response.status !== HTTP_STATUS.NOT_FOUND) return null;
-
+/** Read the error code + raw text from a (cloned) response without consuming it. */
+async function readErrorCode(response: Response): Promise<{ code: string; text: string }> {
 	const clone = response.clone();
 	let text = "";
 	try {
@@ -251,20 +251,40 @@ async function mapUsageLimit404(response: Response): Promise<Response | null> {
 	} catch {
 		text = "";
 	}
-	if (!text) return null;
-
 	let code = "";
-	try {
-		const parsed = JSON.parse(text) as any;
-		code = (parsed?.error?.code ?? parsed?.error?.type ?? "").toString();
-	} catch {
-		code = "";
+	if (text) {
+		try {
+			const parsed = JSON.parse(text) as any;
+			code = (parsed?.error?.code ?? parsed?.error?.type ?? "").toString();
+		} catch {
+			code = "";
+		}
 	}
+	return { code, text };
+}
 
-	const haystack = `${code} ${text}`.toLowerCase();
-	if (!/usage_limit_reached|usage_not_included|rate_limit_exceeded|usage limit/i.test(haystack)) {
+/**
+ * Inspect a non-ok response and classify it as a usage-limit error.
+ * Used by the rotation loop to decide whether to fall back to another account.
+ * Does NOT consume the response body (uses a clone).
+ */
+export async function inspectUsageLimitResponse(
+	response: Response,
+): Promise<"rate_limit" | "plan_ineligible" | null> {
+	if (response.status !== HTTP_STATUS.NOT_FOUND && response.status !== HTTP_STATUS.TOO_MANY_REQUESTS) {
 		return null;
 	}
+	const { code, text } = await readErrorCode(response);
+	if (!text) return null;
+	return classifyUsageLimitError(code, text);
+}
+
+async function mapUsageLimit404(response: Response): Promise<Response | null> {
+	if (response.status !== HTTP_STATUS.NOT_FOUND) return null;
+
+	const { code, text } = await readErrorCode(response);
+	if (!text) return null;
+	if (classifyUsageLimitError(code, text) === null) return null;
 
 	const headers = new Headers(response.headers);
 	return new Response(response.body, {
