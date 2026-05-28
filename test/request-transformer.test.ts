@@ -10,6 +10,7 @@ import {
     addCodexBridgeMessage,
     transformRequestBody,
 } from '../lib/request/request-transformer.js';
+import { isCodexSupportedModel } from '../lib/request/helpers/model-map.js';
 import { TOOL_REMAP_MESSAGE } from '../lib/prompts/codex.js';
 import { CODEX_OPENCODE_BRIDGE } from '../lib/prompts/codex-opencode-bridge.js';
 import type { RequestBody, UserConfig, InputItem } from '../lib/types.js';
@@ -132,6 +133,38 @@ describe('Request Transformer Module', () => {
 			it('should handle empty string', async () => {
 				expect(normalizeModel('')).toBe('gpt-5.1');
 			});
+		});
+	});
+
+	describe('isCodexSupportedModel', () => {
+		it('returns true for known Codex map entries', () => {
+			expect(isCodexSupportedModel('gpt-5.1-codex')).toBe(true);
+			expect(isCodexSupportedModel('gpt-5.2-codex-high')).toBe(true);
+			expect(isCodexSupportedModel('gpt-5.1')).toBe(true);
+			expect(isCodexSupportedModel('codex-mini-latest')).toBe(true);
+		});
+
+		it('strips provider prefix before matching', () => {
+			expect(isCodexSupportedModel('openai/gpt-5-codex')).toBe(true);
+			expect(isCodexSupportedModel('openai/gpt-5.1')).toBe(true);
+		});
+
+		it('returns true for unknown variants matching Codex patterns', () => {
+			expect(isCodexSupportedModel('custom-gpt-5-codex-variant')).toBe(true);
+			expect(isCodexSupportedModel('GPT 5 Codex Low (ChatGPT Subscription)')).toBe(true);
+		});
+
+		it('returns false for non-Codex models', () => {
+			expect(isCodexSupportedModel('minimax-m2.5')).toBe(false);
+			expect(isCodexSupportedModel('claude-3-5-sonnet')).toBe(false);
+			expect(isCodexSupportedModel('gpt-4')).toBe(false);
+			expect(isCodexSupportedModel('gpt-3.5-turbo')).toBe(false);
+			expect(isCodexSupportedModel('llama-3.1-70b')).toBe(false);
+		});
+
+		it('returns true when model is missing (preserves default fallback)', () => {
+			expect(isCodexSupportedModel(undefined)).toBe(true);
+			expect(isCodexSupportedModel('')).toBe(true);
 		});
 	});
 

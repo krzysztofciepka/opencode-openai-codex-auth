@@ -61,6 +61,7 @@ import { createFileStore } from "./lib/accounts/store.js";
 import { createAccountManager } from "./lib/accounts/manager.js";
 import { NoUsableAccountError } from "./lib/accounts/errors.js";
 import { rotatingFetch } from "./lib/request/rotating-fetch.js";
+import { isCodexSupportedModel } from "./lib/request/helpers/model-map.js";
 import type { AccountRecord, UserConfig } from "./lib/types.js";
 
 /**
@@ -210,11 +211,23 @@ export const OpenAIAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 					): Promise<Response> {
 						// Extract and rewrite URL for Codex backend
 						const originalUrl = extractRequestUrl(input);
-						const url = rewriteUrlForCodex(originalUrl);
 
 						// Capture original stream value before transformation
 						const originalBody = init?.body ? JSON.parse(init.body as string) : {};
 						const isStreaming = originalBody.stream === true;
+
+						// Bypass plugin handling for non-Codex models (e.g. minimax-m2.5
+						// served by blackbox.ai through the same opencode "openai" provider
+						// entry). Skip URL rewrite, body transformation, OAuth headers,
+						// rotation, and auth-slot mirroring.
+						if (!isCodexSupportedModel(originalBody.model)) {
+							logDebug(
+								`[${PLUGIN_NAME}] Bypassing plugin for non-Codex model: ${originalBody.model}`,
+							);
+							return fetch(originalUrl, init);
+						}
+
+						const url = rewriteUrlForCodex(originalUrl);
 
 						// Transform request body with model-specific Codex instructions
 						const transformation = await transformRequestForCodex(

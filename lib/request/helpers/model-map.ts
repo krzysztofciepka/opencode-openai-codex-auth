@@ -120,3 +120,28 @@ export function getNormalizedModel(modelId: string): string | undefined {
 export function isKnownModel(modelId: string): boolean {
 	return getNormalizedModel(modelId) !== undefined;
 }
+
+/**
+ * Patterns that identify a model as part of the ChatGPT Codex family
+ * served by this plugin. Mirrors the fallback logic in normalizeModel.
+ */
+const CODEX_MODEL_PATTERNS = ["gpt-5", "gpt 5", "codex"];
+
+/**
+ * Whether a model is handled by the ChatGPT Codex backend this plugin targets.
+ *
+ * Used to bypass plugin-specific request handling (URL rewrite, body
+ * transformation, OAuth headers, multi-account rotation, auth-slot mirroring)
+ * for models that flow through the same opencode `openai` provider entry but
+ * point at a different backend (e.g. minimax-m2.5 served by blackbox.ai).
+ *
+ * Returns true on undefined/empty so existing default-to-gpt-5.1 behavior
+ * is preserved when the request body omits the model field.
+ */
+export function isCodexSupportedModel(model: string | undefined): boolean {
+	if (!model) return true;
+	const modelId = model.includes("/") ? model.split("/").pop()! : model;
+	if (getNormalizedModel(modelId)) return true;
+	const normalized = modelId.toLowerCase();
+	return CODEX_MODEL_PATTERNS.some((p) => normalized.includes(p));
+}

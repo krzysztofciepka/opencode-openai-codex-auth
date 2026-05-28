@@ -100,6 +100,31 @@ describe('plugin rotation (integration)', () => {
 		g.mockRestore();
 	});
 
+	it('bypasses URL rewrite, OAuth headers, and rotation for non-Codex models', async () => {
+		let seenUrl: string | null = null;
+		let seenHeaders: Record<string, string> | null = null;
+		const g = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init: any) => {
+			seenUrl = typeof url === 'string' ? url : (url as URL).toString();
+			seenHeaders = Object.fromEntries(new Headers(init.headers).entries());
+			return new Response(JSON.stringify({ id: 'r1' }), { status: 200 });
+		});
+
+		const { fetch, client } = await buildFetch();
+		const init = {
+			method: 'POST',
+			headers: { authorization: 'Bearer sk-blackbox', 'content-type': 'application/json' },
+			body: JSON.stringify({ model: 'minimax-m2.5', stream: true, input: [] }),
+		};
+		const res = await fetch('https://chatgpt.com/backend-api/responses', init);
+
+		expect(res.status).toBe(200);
+		expect(seenUrl).toBe('https://chatgpt.com/backend-api/responses'); // not rewritten to /codex/responses
+		expect(seenHeaders!['chatgpt-account-id']).toBeUndefined();
+		expect(seenHeaders!['authorization']).toBe('Bearer sk-blackbox'); // not replaced with OAuth bearer
+		expect(client.auth.set).not.toHaveBeenCalled(); // no auth-slot mirroring
+		g.mockRestore();
+	});
+
 	it('falls back within one turn when acc_1 returns a hard usage limit', async () => {
 		const accountsUsed: (string | null)[] = [];
 		const g = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init: any) => {
